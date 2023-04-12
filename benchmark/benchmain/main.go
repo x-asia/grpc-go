@@ -46,7 +46,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -871,7 +870,7 @@ func (nopCompressor) Do(w io.Writer, p []byte) error {
 		return err
 	}
 	if n != len(p) {
-		return fmt.Errorf("nopCompressor.Write: wrote %v bytes; want %v", n, len(p))
+		return fmt.Errorf("nopCompressor.Write: wrote %d bytes; want %d", n, len(p))
 	}
 	return nil
 }
@@ -881,5 +880,5 @@ func (nopCompressor) Type() string { return compModeNop }
 // nopDecompressor is a decompressor that just copies data.
 type nopDecompressor struct{}
 
-func (nopDecompressor) Do(r io.Reader) ([]byte, error) { return ioutil.ReadAll(r) }
+func (nopDecompressor) Do(r io.Reader) ([]byte, error) { return io.ReadAll(r) }
 func (nopDecompressor) Type() string                   { return compModeNop }

@@ -45,11 +45,10 @@ import (
 	v3corepb "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	v3endpointpb "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	wrapperspb "github.com/golang/protobuf/ptypes/wrappers"
-	testgrpc "google.golang.org/grpc/test/grpc_testing"
-	testpb "google.golang.org/grpc/test/grpc_testing"
+	testgrpc "google.golang.org/grpc/interop/grpc_testing"
+	testpb "google.golang.org/grpc/interop/grpc_testing"
 
-	_ "google.golang.org/grpc/xds/internal/balancer/clusterresolver"        // Register the "cluster_resolver_experimental" LB policy.
-	_ "google.golang.org/grpc/xds/internal/xdsclient/controller/version/v3" // Register the v3 xDS API client.
+	_ "google.golang.org/grpc/xds/internal/balancer/clusterresolver" // Register the "cluster_resolver_experimental" LB policy.
 )
 
 const (
@@ -59,7 +58,8 @@ const (
 	localityName2  = "my-locality-2"
 	localityName3  = "my-locality-3"
 
-	defaultTestTimeout = 5 * time.Second
+	defaultTestTimeout      = 5 * time.Second
+	defaultTestShortTimeout = 10 * time.Millisecond
 )
 
 type s struct {
@@ -193,11 +193,11 @@ func (s) TestEDS_OneLocality(t *testing.T) {
 	}
 
 	// Create an xDS client for use by the cluster_resolver LB policy.
-	client, err := xdsclient.NewWithBootstrapContentsForTesting(bootstrapContents)
+	client, close, err := xdsclient.NewWithBootstrapContentsForTesting(bootstrapContents)
 	if err != nil {
 		t.Fatalf("Failed to create xDS client: %v", err)
 	}
-	defer client.Close()
+	defer close()
 
 	// Create a manual resolver and push a service config specifying the use of
 	// the cluster_resolver LB policy with a single discovery mechanism.
@@ -225,7 +225,7 @@ func (s) TestEDS_OneLocality(t *testing.T) {
 	defer cc.Close()
 
 	// Ensure RPCs are being roundrobined across the single backend.
-	testClient := testpb.NewTestServiceClient(cc)
+	testClient := testgrpc.NewTestServiceClient(cc)
 	if err := rrutil.CheckRoundRobinRPCs(ctx, testClient, addrs[:1]); err != nil {
 		t.Fatal(err)
 	}
@@ -301,11 +301,11 @@ func (s) TestEDS_MultipleLocalities(t *testing.T) {
 	}
 
 	// Create an xDS client for use by the cluster_resolver LB policy.
-	client, err := xdsclient.NewWithBootstrapContentsForTesting(bootstrapContents)
+	client, close, err := xdsclient.NewWithBootstrapContentsForTesting(bootstrapContents)
 	if err != nil {
 		t.Fatalf("Failed to create xDS client: %v", err)
 	}
-	defer client.Close()
+	defer close()
 
 	// Create a manual resolver and push service config specifying the use of
 	// the cluster_resolver LB policy with a single discovery mechanism.
@@ -333,7 +333,7 @@ func (s) TestEDS_MultipleLocalities(t *testing.T) {
 	defer cc.Close()
 
 	// Ensure RPCs are being weighted roundrobined across the two backends.
-	testClient := testpb.NewTestServiceClient(cc)
+	testClient := testgrpc.NewTestServiceClient(cc)
 	if err := rrutil.CheckWeightedRoundRobinRPCs(ctx, testClient, addrs[0:2]); err != nil {
 		t.Fatal(err)
 	}
@@ -439,11 +439,11 @@ func (s) TestEDS_EndpointsHealth(t *testing.T) {
 	}
 
 	// Create an xDS client for use by the cluster_resolver LB policy.
-	client, err := xdsclient.NewWithBootstrapContentsForTesting(bootstrapContents)
+	client, close, err := xdsclient.NewWithBootstrapContentsForTesting(bootstrapContents)
 	if err != nil {
 		t.Fatalf("Failed to create xDS client: %v", err)
 	}
-	defer client.Close()
+	defer close()
 
 	// Create a manual resolver and push service config specifying the use of
 	// the cluster_resolver LB policy with a single discovery mechanism.
@@ -472,7 +472,7 @@ func (s) TestEDS_EndpointsHealth(t *testing.T) {
 
 	// Ensure RPCs are being weighted roundrobined across healthy backends from
 	// both localities.
-	testClient := testpb.NewTestServiceClient(cc)
+	testClient := testgrpc.NewTestServiceClient(cc)
 	if err := rrutil.CheckWeightedRoundRobinRPCs(ctx, testClient, append(addrs[0:2], addrs[6:8]...)); err != nil {
 		t.Fatal(err)
 	}
@@ -505,11 +505,11 @@ func (s) TestEDS_EmptyUpdate(t *testing.T) {
 	}
 
 	// Create an xDS client for use by the cluster_resolver LB policy.
-	client, err := xdsclient.NewWithBootstrapContentsForTesting(bootstrapContents)
+	client, close, err := xdsclient.NewWithBootstrapContentsForTesting(bootstrapContents)
 	if err != nil {
 		t.Fatalf("Failed to create xDS client: %v", err)
 	}
-	defer client.Close()
+	defer close()
 
 	// Create a manual resolver and push service config specifying the use of
 	// the cluster_resolver LB policy with a single discovery mechanism.
@@ -537,7 +537,7 @@ func (s) TestEDS_EmptyUpdate(t *testing.T) {
 		t.Fatalf("failed to dial local test server: %v", err)
 	}
 	defer cc.Close()
-	testClient := testpb.NewTestServiceClient(cc)
+	testClient := testgrpc.NewTestServiceClient(cc)
 	if err := waitForAllPrioritiesRemovedError(ctx, t, testClient); err != nil {
 		t.Fatal(err)
 	}

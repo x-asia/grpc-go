@@ -452,7 +452,7 @@ func setUpWithOptions(t *testing.T, port int, sc *ServerConfig, ht hType, copts 
 	copts.ChannelzParentID = channelz.NewIdentifierForTesting(channelz.RefSubChannel, time.Now().Unix(), nil)
 
 	connectCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(2*time.Second))
-	ct, connErr := NewClientTransport(connectCtx, context.Background(), addr, copts, func(GoAwayReason) {}, func() {})
+	ct, connErr := NewClientTransport(connectCtx, context.Background(), addr, copts, func(GoAwayReason) {})
 	if connErr != nil {
 		cancel() // Do not cancel in success path.
 		t.Fatalf("failed to create transport: %v", connErr)
@@ -483,7 +483,7 @@ func setUpWithNoPingServer(t *testing.T, copts ConnectOptions, connCh chan net.C
 		connCh <- conn
 	}()
 	connectCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(2*time.Second))
-	tr, err := NewClientTransport(connectCtx, context.Background(), resolver.Address{Addr: lis.Addr().String()}, copts, func(GoAwayReason) {}, func() {})
+	tr, err := NewClientTransport(connectCtx, context.Background(), resolver.Address{Addr: lis.Addr().String()}, copts, func(GoAwayReason) {})
 	if err != nil {
 		cancel() // Do not cancel in success path.
 		// Server clean-up.
@@ -533,6 +533,52 @@ func (s) TestInflightStreamClosing(t *testing.T) {
 		}
 	case <-timeout.C:
 		t.Fatalf("Test timed out, expected a status error.")
+	}
+}
+
+// Tests that when streamID > MaxStreamId, the current client transport drains.
+func (s) TestClientTransportDrainsAfterStreamIDExhausted(t *testing.T) {
+	server, ct, cancel := setUp(t, 0, math.MaxUint32, normal)
+	defer cancel()
+	defer server.stop()
+	callHdr := &CallHdr{
+		Host:   "localhost",
+		Method: "foo.Small",
+	}
+
+	originalMaxStreamID := MaxStreamID
+	MaxStreamID = 3
+	defer func() {
+		MaxStreamID = originalMaxStreamID
+	}()
+
+	ctx, ctxCancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer ctxCancel()
+
+	s, err := ct.NewStream(ctx, callHdr)
+	if err != nil {
+		t.Fatalf("ct.NewStream() = %v", err)
+	}
+	if s.id != 1 {
+		t.Fatalf("Stream id: %d, want: 1", s.id)
+	}
+
+	if got, want := ct.stateForTesting(), reachable; got != want {
+		t.Fatalf("Client transport state %v, want %v", got, want)
+	}
+
+	// The expected stream ID here is 3 since stream IDs are incremented by 2.
+	s, err = ct.NewStream(ctx, callHdr)
+	if err != nil {
+		t.Fatalf("ct.NewStream() = %v", err)
+	}
+	if s.id != 3 {
+		t.Fatalf("Stream id: %d, want: 3", s.id)
+	}
+
+	// Verifying that ct.state is draining when next stream ID > MaxStreamId.
+	if got, want := ct.stateForTesting(), draining; got != want {
+		t.Fatalf("Client transport state %v, want %v", got, want)
 	}
 }
 
@@ -613,16 +659,13 @@ func performOneRPC(ct ClientTransport) {
 func (s) TestClientMix(t *testing.T) {
 	s, ct, cancel := setUp(t, 0, math.MaxUint32, normal)
 	defer cancel()
-	go func(s *server) {
-		time.Sleep(5 * time.Second)
-		s.stop()
-	}(s)
+	time.AfterFunc(time.Second, s.stop)
 	go func(ct ClientTransport) {
 		<-ct.Error()
 		ct.Close(fmt.Errorf("closed manually by test"))
 	}(ct)
-	for i := 0; i < 1000; i++ {
-		time.Sleep(10 * time.Millisecond)
+	for i := 0; i < 750; i++ {
+		time.Sleep(2 * time.Millisecond)
 		go performOneRPC(ct)
 	}
 }
@@ -759,6 +802,9 @@ func (s) TestLargeMessageWithDelayRead(t *testing.T) {
 	}
 }
 
+// TestGracefulClose ensures that GracefulClose allows in-flight streams to
+// proceed until they complete naturally, while not allowing creation of new
+// streams during this window.
 func (s) TestGracefulClose(t *testing.T) {
 	server, ct, cancel := setUp(t, 0, math.MaxUint32, pingpong)
 	defer cancel()
@@ -774,6 +820,9 @@ func (s) TestGracefulClose(t *testing.T) {
 	}()
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second*10))
 	defer cancel()
+
+	// Create a stream that will exist for this whole test and confirm basic
+	// functionality.
 	s, err := ct.NewStream(ctx, &CallHdr{})
 	if err != nil {
 		t.Fatalf("NewStream(_, _) = _, %v, want _, <nil>", err)
@@ -794,31 +843,31 @@ func (s) TestGracefulClose(t *testing.T) {
 	if _, err := s.Read(recvMsg); err != nil {
 		t.Fatalf("Error while reading: %v", err)
 	}
+
+	// Gracefully close the transport, which should not affect the existing
+	// stream.
 	ct.GracefulClose()
+
 	var wg sync.WaitGroup
-	// Expect the failure for all the follow-up streams because ct has been closed gracefully.
+	// Expect errors creating new streams because the client transport has been
+	// gracefully closed.
 	for i := 0; i < 200; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			str, err := ct.NewStream(ctx, &CallHdr{})
-			if err != nil && err.(*NewStreamError).Err == ErrConnClosing {
-				return
-			} else if err != nil {
-				t.Errorf("_.NewStream(_, _) = _, %v, want _, %v", err, ErrConnClosing)
+			_, err := ct.NewStream(ctx, &CallHdr{})
+			if err != nil && err.(*NewStreamError).Err == ErrConnClosing && err.(*NewStreamError).AllowTransparentRetry {
 				return
 			}
-			ct.Write(str, nil, nil, &Options{Last: true})
-			if _, err := str.Read(make([]byte, 8)); err != errStreamDrain && err != ErrConnClosing {
-				t.Errorf("_.Read(_) = _, %v, want _, %v or %v", err, errStreamDrain, ErrConnClosing)
-			}
+			t.Errorf("_.NewStream(_, _) = _, %v, want _, %v", err, ErrConnClosing)
 		}()
 	}
+
+	// Confirm the existing stream still functions as expected.
 	ct.Write(s, nil, nil, &Options{Last: true})
 	if _, err := s.Read(incomingHeader); err != io.EOF {
 		t.Fatalf("Client expected EOF from the server. Got: %v", err)
 	}
-	// The stream which was created before graceful close can still proceed.
 	wg.Wait()
 }
 
@@ -1287,7 +1336,7 @@ func (s) TestClientHonorsConnectContext(t *testing.T) {
 	time.AfterFunc(100*time.Millisecond, cancel)
 
 	copts := ConnectOptions{ChannelzParentID: channelz.NewIdentifierForTesting(channelz.RefSubChannel, time.Now().Unix(), nil)}
-	_, err = NewClientTransport(connectCtx, context.Background(), resolver.Address{Addr: lis.Addr().String()}, copts, func(GoAwayReason) {}, func() {})
+	_, err = NewClientTransport(connectCtx, context.Background(), resolver.Address{Addr: lis.Addr().String()}, copts, func(GoAwayReason) {})
 	if err == nil {
 		t.Fatalf("NewClientTransport() returned successfully; wanted error")
 	}
@@ -1299,7 +1348,7 @@ func (s) TestClientHonorsConnectContext(t *testing.T) {
 	// Test context deadline.
 	connectCtx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err = NewClientTransport(connectCtx, context.Background(), resolver.Address{Addr: lis.Addr().String()}, copts, func(GoAwayReason) {}, func() {})
+	_, err = NewClientTransport(connectCtx, context.Background(), resolver.Address{Addr: lis.Addr().String()}, copts, func(GoAwayReason) {})
 	if err == nil {
 		t.Fatalf("NewClientTransport() returned successfully; wanted error")
 	}
@@ -1378,7 +1427,7 @@ func (s) TestClientWithMisbehavedServer(t *testing.T) {
 	defer cancel()
 
 	copts := ConnectOptions{ChannelzParentID: channelz.NewIdentifierForTesting(channelz.RefSubChannel, time.Now().Unix(), nil)}
-	ct, err := NewClientTransport(connectCtx, context.Background(), resolver.Address{Addr: lis.Addr().String()}, copts, func(GoAwayReason) {}, func() {})
+	ct, err := NewClientTransport(connectCtx, context.Background(), resolver.Address{Addr: lis.Addr().String()}, copts, func(GoAwayReason) {})
 	if err != nil {
 		t.Fatalf("Error while creating client transport: %v", err)
 	}
@@ -1952,105 +2001,154 @@ func (s) TestHeadersHTTPStatusGRPCStatus(t *testing.T) {
 			grpcStatusWant:  "13",
 			grpcMessageWant: "which should be POST",
 		},
+		{
+			name: "Client Sending Wrong Content-Type",
+			headers: []struct {
+				name   string
+				values []string
+			}{
+				{name: ":method", values: []string{"POST"}},
+				{name: ":path", values: []string{"foo"}},
+				{name: ":authority", values: []string{"localhost"}},
+				{name: "content-type", values: []string{"application/json"}},
+			},
+			httpStatusWant:  "415",
+			grpcStatusWant:  "3",
+			grpcMessageWant: `invalid gRPC request content-type "application/json"`,
+		},
+		{
+			name: "Client Sending Bad Timeout",
+			headers: []struct {
+				name   string
+				values []string
+			}{
+				{name: ":method", values: []string{"POST"}},
+				{name: ":path", values: []string{"foo"}},
+				{name: ":authority", values: []string{"localhost"}},
+				{name: "content-type", values: []string{"application/grpc"}},
+				{name: "grpc-timeout", values: []string{"18f6n"}},
+			},
+			httpStatusWant:  "400",
+			grpcStatusWant:  "13",
+			grpcMessageWant: "malformed grpc-timeout",
+		},
+		{
+			name: "Client Sending Bad Binary Header",
+			headers: []struct {
+				name   string
+				values []string
+			}{
+				{name: ":method", values: []string{"POST"}},
+				{name: ":path", values: []string{"foo"}},
+				{name: ":authority", values: []string{"localhost"}},
+				{name: "content-type", values: []string{"application/grpc"}},
+				{name: "foobar-bin", values: []string{"X()3e@#$-"}},
+			},
+			httpStatusWant:  "400",
+			grpcStatusWant:  "13",
+			grpcMessageWant: `header "foobar-bin": illegal base64 data`,
+		},
 	}
 	for _, test := range tests {
-		server := setUpServerOnly(t, 0, &ServerConfig{}, suspended)
-		defer server.stop()
-		// Create a client directly to not tie what you can send to API of
-		// http2_client.go (i.e. control headers being sent).
-		mconn, err := net.Dial("tcp", server.lis.Addr().String())
-		if err != nil {
-			t.Fatalf("Client failed to dial: %v", err)
-		}
-		defer mconn.Close()
+		t.Run(test.name, func(t *testing.T) {
+			server := setUpServerOnly(t, 0, &ServerConfig{}, suspended)
+			defer server.stop()
+			// Create a client directly to not tie what you can send to API of
+			// http2_client.go (i.e. control headers being sent).
+			mconn, err := net.Dial("tcp", server.lis.Addr().String())
+			if err != nil {
+				t.Fatalf("Client failed to dial: %v", err)
+			}
+			defer mconn.Close()
 
-		if n, err := mconn.Write(clientPreface); err != nil || n != len(clientPreface) {
-			t.Fatalf("mconn.Write(clientPreface) = %d, %v, want %d, <nil>", n, err, len(clientPreface))
-		}
+			if n, err := mconn.Write(clientPreface); err != nil || n != len(clientPreface) {
+				t.Fatalf("mconn.Write(clientPreface) = %d, %v, want %d, <nil>", n, err, len(clientPreface))
+			}
 
-		framer := http2.NewFramer(mconn, mconn)
-		framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
-		if err := framer.WriteSettings(); err != nil {
-			t.Fatalf("Error while writing settings: %v", err)
-		}
+			framer := http2.NewFramer(mconn, mconn)
+			framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
+			if err := framer.WriteSettings(); err != nil {
+				t.Fatalf("Error while writing settings: %v", err)
+			}
 
-		// result chan indicates that reader received a Headers Frame with
-		// desired grpc status and message from server. An error will be passed
-		// on it if any other frame is received.
-		result := testutils.NewChannel()
+			// result chan indicates that reader received a Headers Frame with
+			// desired grpc status and message from server. An error will be passed
+			// on it if any other frame is received.
+			result := testutils.NewChannel()
 
-		// Launch a reader goroutine.
-		go func() {
-			for {
-				frame, err := framer.ReadFrame()
-				if err != nil {
-					return
+			// Launch a reader goroutine.
+			go func() {
+				for {
+					frame, err := framer.ReadFrame()
+					if err != nil {
+						return
+					}
+					switch frame := frame.(type) {
+					case *http2.SettingsFrame:
+						// Do nothing. A settings frame is expected from server preface.
+					case *http2.MetaHeadersFrame:
+						var httpStatus, grpcStatus, grpcMessage string
+						for _, header := range frame.Fields {
+							if header.Name == ":status" {
+								httpStatus = header.Value
+							}
+							if header.Name == "grpc-status" {
+								grpcStatus = header.Value
+							}
+							if header.Name == "grpc-message" {
+								grpcMessage = header.Value
+							}
+						}
+						if httpStatus != test.httpStatusWant {
+							result.Send(fmt.Errorf("incorrect HTTP Status got %v, want %v", httpStatus, test.httpStatusWant))
+							return
+						}
+						if grpcStatus != test.grpcStatusWant { // grpc status code internal
+							result.Send(fmt.Errorf("incorrect gRPC Status got %v, want %v", grpcStatus, test.grpcStatusWant))
+							return
+						}
+						if !strings.Contains(grpcMessage, test.grpcMessageWant) {
+							result.Send(fmt.Errorf("incorrect gRPC message, want %q got %q", test.grpcMessageWant, grpcMessage))
+							return
+						}
+
+						// Records that client successfully received a HeadersFrame
+						// with expected Trailers-Only response.
+						result.Send(nil)
+						return
+					default:
+						// The server should send nothing but a single Settings and Headers frame.
+						result.Send(errors.New("the client received a frame other than Settings or Headers"))
+					}
 				}
-				switch frame := frame.(type) {
-				case *http2.SettingsFrame:
-					// Do nothing. A settings frame is expected from server preface.
-				case *http2.MetaHeadersFrame:
-					var httpStatus, grpcStatus, grpcMessage string
-					for _, header := range frame.Fields {
-						if header.Name == ":status" {
-							httpStatus = header.Value
-						}
-						if header.Name == "grpc-status" {
-							grpcStatus = header.Value
-						}
-						if header.Name == "grpc-message" {
-							grpcMessage = header.Value
-						}
-					}
-					if httpStatus != test.httpStatusWant {
-						result.Send(fmt.Errorf("incorrect HTTP Status got %v, want %v", httpStatus, test.httpStatusWant))
-						return
-					}
-					if grpcStatus != test.grpcStatusWant { // grpc status code internal
-						result.Send(fmt.Errorf("incorrect gRPC Status got %v, want %v", grpcStatus, test.grpcStatusWant))
-						return
-					}
-					if !strings.Contains(grpcMessage, test.grpcMessageWant) {
-						result.Send(fmt.Errorf("incorrect gRPC message"))
-						return
-					}
+			}()
 
-					// Records that client successfully received a HeadersFrame
-					// with expected Trailers-Only response.
-					result.Send(nil)
-					return
-				default:
-					// The server should send nothing but a single Settings and Headers frame.
-					result.Send(errors.New("the client received a frame other than Settings or Headers"))
+			var buf bytes.Buffer
+			henc := hpack.NewEncoder(&buf)
+
+			// Needs to build headers deterministically to conform to gRPC over
+			// HTTP/2 spec.
+			for _, header := range test.headers {
+				for _, value := range header.values {
+					if err := henc.WriteField(hpack.HeaderField{Name: header.name, Value: value}); err != nil {
+						t.Fatalf("Error while encoding header: %v", err)
+					}
 				}
 			}
-		}()
 
-		var buf bytes.Buffer
-		henc := hpack.NewEncoder(&buf)
-
-		// Needs to build headers deterministically to conform to gRPC over
-		// HTTP/2 spec.
-		for _, header := range test.headers {
-			for _, value := range header.values {
-				if err := henc.WriteField(hpack.HeaderField{Name: header.name, Value: value}); err != nil {
-					t.Fatalf("Error while encoding header: %v", err)
-				}
+			if err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: buf.Bytes(), EndHeaders: true}); err != nil {
+				t.Fatalf("Error while writing headers: %v", err)
 			}
-		}
-
-		if err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: buf.Bytes(), EndHeaders: true}); err != nil {
-			t.Fatalf("Error while writing headers: %v", err)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-		defer cancel()
-		r, err := result.Receive(ctx)
-		if err != nil {
-			t.Fatalf("Error receiving from channel: %v", err)
-		}
-		if r != nil {
-			t.Fatalf("want nil, got %v", r)
-		}
+			ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+			defer cancel()
+			r, err := result.Receive(ctx)
+			if err != nil {
+				t.Fatalf("Error receiving from channel: %v", err)
+			}
+			if r != nil {
+				t.Fatalf("want nil, got %v", r)
+			}
+		})
 	}
 }
 
@@ -2096,33 +2194,26 @@ func runPingPongTest(t *testing.T, msgSize int) {
 	binary.BigEndian.PutUint32(outgoingHeader[1:], uint32(msgSize))
 	opts := &Options{}
 	incomingHeader := make([]byte, 5)
-	done := make(chan struct{})
-	go func() {
-		timer := time.NewTimer(time.Second * 5)
-		<-timer.C
-		close(done)
-	}()
-	for {
-		select {
-		case <-done:
-			client.Write(stream, nil, nil, &Options{Last: true})
-			if _, err := stream.Read(incomingHeader); err != io.EOF {
-				t.Fatalf("Client expected EOF from the server. Got: %v", err)
-			}
-			return
-		default:
-			if err := client.Write(stream, outgoingHeader, msg, opts); err != nil {
-				t.Fatalf("Error on client while writing message. Err: %v", err)
-			}
-			if _, err := stream.Read(incomingHeader); err != nil {
-				t.Fatalf("Error on client while reading data header. Err: %v", err)
-			}
-			sz := binary.BigEndian.Uint32(incomingHeader[1:])
-			recvMsg := make([]byte, int(sz))
-			if _, err := stream.Read(recvMsg); err != nil {
-				t.Fatalf("Error on client while reading data. Err: %v", err)
-			}
+
+	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	for ctx.Err() == nil {
+		if err := client.Write(stream, outgoingHeader, msg, opts); err != nil {
+			t.Fatalf("Error on client while writing message. Err: %v", err)
 		}
+		if _, err := stream.Read(incomingHeader); err != nil {
+			t.Fatalf("Error on client while reading data header. Err: %v", err)
+		}
+		sz := binary.BigEndian.Uint32(incomingHeader[1:])
+		recvMsg := make([]byte, int(sz))
+		if _, err := stream.Read(recvMsg); err != nil {
+			t.Fatalf("Error on client while reading data. Err: %v", err)
+		}
+	}
+
+	client.Write(stream, nil, nil, &Options{Last: true})
+	if _, err := stream.Read(incomingHeader); err != io.EOF {
+		t.Fatalf("Client expected EOF from the server. Got: %v", err)
 	}
 }
 
@@ -2282,7 +2373,7 @@ func (s) TestClientHandshakeInfo(t *testing.T) {
 		TransportCredentials: creds,
 		ChannelzParentID:     channelz.NewIdentifierForTesting(channelz.RefSubChannel, time.Now().Unix(), nil),
 	}
-	tr, err := NewClientTransport(ctx, context.Background(), addr, copts, func(GoAwayReason) {}, func() {})
+	tr, err := NewClientTransport(ctx, context.Background(), addr, copts, func(GoAwayReason) {})
 	if err != nil {
 		t.Fatalf("NewClientTransport(): %v", err)
 	}
@@ -2323,7 +2414,7 @@ func (s) TestClientHandshakeInfoDialer(t *testing.T) {
 		Dialer:           dialer,
 		ChannelzParentID: channelz.NewIdentifierForTesting(channelz.RefSubChannel, time.Now().Unix(), nil),
 	}
-	tr, err := NewClientTransport(ctx, context.Background(), addr, copts, func(GoAwayReason) {}, func() {})
+	tr, err := NewClientTransport(ctx, context.Background(), addr, copts, func(GoAwayReason) {})
 	if err != nil {
 		t.Fatalf("NewClientTransport(): %v", err)
 	}

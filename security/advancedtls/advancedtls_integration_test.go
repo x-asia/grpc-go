@@ -23,7 +23,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"sync"
@@ -42,8 +41,6 @@ import (
 const (
 	// Default timeout for normal connections.
 	defaultTestTimeout = 5 * time.Second
-	// Default timeout for failed connections.
-	defaultTestShortTimeout = 10 * time.Millisecond
 	// Intervals that set to monitor the credential updates.
 	credRefreshingInterval = 200 * time.Millisecond
 	// Time we wait for the credential updates to be picked up.
@@ -401,18 +398,19 @@ func (s) TestEnd2End(t *testing.T) {
 			}
 			// ------------------------Scenario 3------------------------------------
 			// stage = 1, new connection should fail
-			shortCtx, shortCancel := context.WithTimeout(context.Background(), defaultTestShortTimeout)
-			defer shortCancel()
-			conn2, greetClient, err := callAndVerifyWithClientConn(shortCtx, addr, "rpc call 3", clientTLSCreds, true)
+			ctx2, cancel2 := context.WithTimeout(context.Background(), defaultTestTimeout)
+			conn2, _, err := callAndVerifyWithClientConn(ctx2, addr, "rpc call 3", clientTLSCreds, true)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer conn2.Close()
+			// Immediately cancel the context so the dialing won't drag the entire timeout still it stops.
+			cancel2()
 			// ----------------------------------------------------------------------
 			stage.increase()
 			// ------------------------Scenario 4------------------------------------
 			// stage = 2,  new connection should succeed
-			conn3, greetClient, err := callAndVerifyWithClientConn(ctx, addr, "rpc call 4", clientTLSCreds, false)
+			conn3, _, err := callAndVerifyWithClientConn(ctx, addr, "rpc call 4", clientTLSCreds, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -436,27 +434,27 @@ type tmpCredsFiles struct {
 func createTmpFiles() (*tmpCredsFiles, error) {
 	tmpFiles := &tmpCredsFiles{}
 	var err error
-	tmpFiles.clientCertTmp, err = ioutil.TempFile(os.TempDir(), "pre-")
+	tmpFiles.clientCertTmp, err = os.CreateTemp(os.TempDir(), "pre-")
 	if err != nil {
 		return nil, err
 	}
-	tmpFiles.clientKeyTmp, err = ioutil.TempFile(os.TempDir(), "pre-")
+	tmpFiles.clientKeyTmp, err = os.CreateTemp(os.TempDir(), "pre-")
 	if err != nil {
 		return nil, err
 	}
-	tmpFiles.clientTrustTmp, err = ioutil.TempFile(os.TempDir(), "pre-")
+	tmpFiles.clientTrustTmp, err = os.CreateTemp(os.TempDir(), "pre-")
 	if err != nil {
 		return nil, err
 	}
-	tmpFiles.serverCertTmp, err = ioutil.TempFile(os.TempDir(), "pre-")
+	tmpFiles.serverCertTmp, err = os.CreateTemp(os.TempDir(), "pre-")
 	if err != nil {
 		return nil, err
 	}
-	tmpFiles.serverKeyTmp, err = ioutil.TempFile(os.TempDir(), "pre-")
+	tmpFiles.serverKeyTmp, err = os.CreateTemp(os.TempDir(), "pre-")
 	if err != nil {
 		return nil, err
 	}
-	tmpFiles.serverTrustTmp, err = ioutil.TempFile(os.TempDir(), "pre-")
+	tmpFiles.serverTrustTmp, err = os.CreateTemp(os.TempDir(), "pre-")
 	if err != nil {
 		return nil, err
 	}
@@ -496,11 +494,11 @@ func (tmpFiles *tmpCredsFiles) removeFiles() {
 }
 
 func copyFileContents(sourceFile, destinationFile string) error {
-	input, err := ioutil.ReadFile(sourceFile)
+	input, err := os.ReadFile(sourceFile)
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(destinationFile, input, 0644)
+	err = os.WriteFile(destinationFile, input, 0644)
 	if err != nil {
 		return err
 	}
@@ -692,7 +690,7 @@ func (s) TestPEMFileProviderEnd2End(t *testing.T) {
 			}
 			// New connections should still be good, because the Provider didn't pick
 			// up the changes due to key-cert mismatch.
-			conn2, greetClient, err := callAndVerifyWithClientConn(ctx, addr, "rpc call 3", clientTLSCreds, false)
+			conn2, _, err := callAndVerifyWithClientConn(ctx, addr, "rpc call 3", clientTLSCreds, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -704,20 +702,21 @@ func (s) TestPEMFileProviderEnd2End(t *testing.T) {
 			// New connections should fail now, because the Provider picked the
 			// change, and *_cert_2.pem is not trusted by *_trust_cert_1.pem on the
 			// other side.
-			shortCtx, shortCancel := context.WithTimeout(context.Background(), defaultTestShortTimeout)
-			defer shortCancel()
-			conn3, greetClient, err := callAndVerifyWithClientConn(shortCtx, addr, "rpc call 4", clientTLSCreds, true)
+			ctx2, cancel2 := context.WithTimeout(context.Background(), defaultTestTimeout)
+			conn3, _, err := callAndVerifyWithClientConn(ctx2, addr, "rpc call 4", clientTLSCreds, true)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer conn3.Close()
+			// Immediately cancel the context so the dialing won't drag the entire timeout still it stops.
+			cancel2()
 			// Make the trust cert change on the other side, and wait 1 second for
 			// the provider to pick up the change.
 			test.trustCertUpdateFunc()
 			time.Sleep(sleepInterval)
 			// New connections should be good, because the other side is using
 			// *_trust_cert_2.pem now.
-			conn4, greetClient, err := callAndVerifyWithClientConn(ctx, addr, "rpc call 5", clientTLSCreds, false)
+			conn4, _, err := callAndVerifyWithClientConn(ctx, addr, "rpc call 5", clientTLSCreds, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -732,13 +731,12 @@ func (s) TestDefaultHostNameCheck(t *testing.T) {
 		t.Fatalf("cs.LoadCerts() failed, err: %v", err)
 	}
 	for _, test := range []struct {
-		desc             string
-		clientRoot       *x509.CertPool
-		clientVerifyFunc CustomVerificationFunc
-		clientVType      VerificationType
-		serverCert       []tls.Certificate
-		serverVType      VerificationType
-		expectError      bool
+		desc        string
+		clientRoot  *x509.CertPool
+		clientVType VerificationType
+		serverCert  []tls.Certificate
+		serverVType VerificationType
+		expectError bool
 	}{
 		// Client side sets vType to CertAndHostVerification, and will do
 		// default hostname check. Server uses a cert without "localhost" or
@@ -788,11 +786,152 @@ func (s) TestDefaultHostNameCheck(t *testing.T) {
 			pb.RegisterGreeterServer(s, greeterServer{})
 			go s.Serve(lis)
 			clientOptions := &ClientOptions{
-				VerifyPeer: test.clientVerifyFunc,
 				RootOptions: RootCertificateOptions{
 					RootCACerts: test.clientRoot,
 				},
 				VType: test.clientVType,
+			}
+			clientTLSCreds, err := NewClientCreds(clientOptions)
+			if err != nil {
+				t.Fatalf("clientTLSCreds failed to create: %v", err)
+			}
+			shouldFail := false
+			if test.expectError {
+				shouldFail = true
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+			defer cancel()
+			conn, _, err := callAndVerifyWithClientConn(ctx, addr, "rpc call 1", clientTLSCreds, shouldFail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+		})
+	}
+}
+
+func (s) TestTLSVersions(t *testing.T) {
+	cs := &testutils.CertStore{}
+	if err := cs.LoadCerts(); err != nil {
+		t.Fatalf("cs.LoadCerts() failed, err: %v", err)
+	}
+	for _, test := range []struct {
+		desc             string
+		expectError      bool
+		clientMinVersion uint16
+		clientMaxVersion uint16
+		serverMinVersion uint16
+		serverMaxVersion uint16
+	}{
+		// Client side sets TLS version that is higher than required from the server side.
+		{
+			desc:             "Client TLS version higher than server",
+			clientMinVersion: tls.VersionTLS13,
+			clientMaxVersion: tls.VersionTLS13,
+			serverMinVersion: tls.VersionTLS12,
+			serverMaxVersion: tls.VersionTLS12,
+			expectError:      true,
+		},
+		// Server side sets TLS version that is higher than required from the client side.
+		{
+			desc:             "Server TLS version higher than client",
+			clientMinVersion: tls.VersionTLS12,
+			clientMaxVersion: tls.VersionTLS12,
+			serverMinVersion: tls.VersionTLS13,
+			serverMaxVersion: tls.VersionTLS13,
+			expectError:      true,
+		},
+		// Client and server set proper TLS versions.
+		{
+			desc:             "Good TLS version settings",
+			clientMinVersion: tls.VersionTLS12,
+			clientMaxVersion: tls.VersionTLS13,
+			serverMinVersion: tls.VersionTLS12,
+			serverMaxVersion: tls.VersionTLS13,
+			expectError:      false,
+		},
+		{
+			desc:             "Client 1.2 - 1.3 and server 1.2",
+			clientMinVersion: tls.VersionTLS12,
+			clientMaxVersion: tls.VersionTLS13,
+			serverMinVersion: tls.VersionTLS12,
+			serverMaxVersion: tls.VersionTLS12,
+			expectError:      false,
+		},
+		{
+			desc:             "Client 1.2 - 1.3 and server 1.1 - 1.2",
+			clientMinVersion: tls.VersionTLS12,
+			clientMaxVersion: tls.VersionTLS13,
+			serverMinVersion: tls.VersionTLS11,
+			serverMaxVersion: tls.VersionTLS12,
+			expectError:      false,
+		},
+		{
+			desc:             "Client 1.2 - 1.3 and server 1.3",
+			clientMinVersion: tls.VersionTLS12,
+			clientMaxVersion: tls.VersionTLS13,
+			serverMinVersion: tls.VersionTLS13,
+			serverMaxVersion: tls.VersionTLS13,
+			expectError:      false,
+		},
+		{
+			desc:             "Client 1.2 - 1.2 and server 1.2 - 1.3",
+			clientMinVersion: tls.VersionTLS12,
+			clientMaxVersion: tls.VersionTLS12,
+			serverMinVersion: tls.VersionTLS12,
+			serverMaxVersion: tls.VersionTLS13,
+			expectError:      false,
+		},
+		{
+			desc:             "Client 1.1 - 1.2 and server 1.2 - 1.3",
+			clientMinVersion: tls.VersionTLS11,
+			clientMaxVersion: tls.VersionTLS12,
+			serverMinVersion: tls.VersionTLS12,
+			serverMaxVersion: tls.VersionTLS13,
+			expectError:      false,
+		},
+		{
+			desc:             "Client 1.3 and server 1.2 - 1.3",
+			clientMinVersion: tls.VersionTLS13,
+			clientMaxVersion: tls.VersionTLS13,
+			serverMinVersion: tls.VersionTLS12,
+			serverMaxVersion: tls.VersionTLS13,
+			expectError:      false,
+		},
+	} {
+		test := test
+		t.Run(test.desc, func(t *testing.T) {
+			// Start a server using ServerOptions in another goroutine.
+			serverOptions := &ServerOptions{
+				IdentityOptions: IdentityCertificateOptions{
+					Certificates: []tls.Certificate{cs.ServerPeerLocalhost1},
+				},
+				RequireClientCert: false,
+				VType:             CertAndHostVerification,
+				MinVersion:        test.serverMinVersion,
+				MaxVersion:        test.serverMaxVersion,
+			}
+			serverTLSCreds, err := NewServerCreds(serverOptions)
+			if err != nil {
+				t.Fatalf("failed to create server creds: %v", err)
+			}
+			s := grpc.NewServer(grpc.Creds(serverTLSCreds))
+			defer s.Stop()
+			lis, err := net.Listen("tcp", "localhost:0")
+			if err != nil {
+				t.Fatalf("failed to listen: %v", err)
+			}
+			defer lis.Close()
+			addr := fmt.Sprintf("localhost:%v", lis.Addr().(*net.TCPAddr).Port)
+			pb.RegisterGreeterServer(s, greeterServer{})
+			go s.Serve(lis)
+			clientOptions := &ClientOptions{
+				RootOptions: RootCertificateOptions{
+					RootCACerts: cs.ClientTrust1,
+				},
+				VType:      CertAndHostVerification,
+				MinVersion: test.clientMinVersion,
+				MaxVersion: test.clientMaxVersion,
 			}
 			clientTLSCreds, err := NewClientCreds(clientOptions)
 			if err != nil {
