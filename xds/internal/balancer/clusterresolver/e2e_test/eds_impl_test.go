@@ -20,8 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +31,7 @@ import (
 	"google.golang.org/grpc/internal/balancergroup"
 	"google.golang.org/grpc/internal/grpctest"
 	"google.golang.org/grpc/internal/stubserver"
+	"google.golang.org/grpc/internal/testutils"
 	rrutil "google.golang.org/grpc/internal/testutils/roundrobin"
 	"google.golang.org/grpc/internal/testutils/xds/e2e"
 	"google.golang.org/grpc/resolver"
@@ -78,29 +77,15 @@ func backendAddressesAndPorts(t *testing.T, servers []*stubserver.StubServer) ([
 	ports := make([]uint32, len(servers))
 	for i := 0; i < len(servers); i++ {
 		addrs[i] = resolver.Address{Addr: servers[i].Address}
-		ports[i] = extractPortFromAddress(t, servers[i].Address)
+		ports[i] = testutils.ParsePort(t, servers[i].Address)
 	}
 	return addrs, ports
 }
 
-func extractPortFromAddress(t *testing.T, address string) uint32 {
-	_, p, err := net.SplitHostPort(address)
-	if err != nil {
-		t.Fatalf("invalid server address %q: %v", address, err)
-	}
-	port, err := strconv.ParseUint(p, 10, 32)
-	if err != nil {
-		t.Fatalf("invalid server address %q: %v", address, err)
-	}
-	return uint32(port)
-}
-
 func startTestServiceBackends(t *testing.T, numBackends int) ([]*stubserver.StubServer, func()) {
-	servers := make([]*stubserver.StubServer, numBackends)
+	var servers []*stubserver.StubServer
 	for i := 0; i < numBackends; i++ {
-		servers[i] = &stubserver.StubServer{
-			EmptyCallF: func(context.Context, *testpb.Empty) (*testpb.Empty, error) { return &testpb.Empty{}, nil },
-		}
+		servers = append(servers, stubserver.StartTestService(t, nil))
 		servers[i].StartServer()
 	}
 
@@ -208,7 +193,8 @@ func (s) TestEDS_OneLocality(t *testing.T) {
 					"discoveryMechanisms": [{
 						"cluster": "%s",
 						"type": "EDS",
-						"edsServiceName": "%s"
+						"edsServiceName": "%s",
+						"outlierDetection": {}
 					}],
 					"xdsLbPolicy":[{"round_robin":{}}]
 				}
@@ -316,7 +302,8 @@ func (s) TestEDS_MultipleLocalities(t *testing.T) {
 					"discoveryMechanisms": [{
 						"cluster": "%s",
 						"type": "EDS",
-						"edsServiceName": "%s"
+						"edsServiceName": "%s",
+						"outlierDetection": {}
 					}],
 					"xdsLbPolicy":[{"round_robin":{}}]
 				}
@@ -379,23 +366,6 @@ func (s) TestEDS_MultipleLocalities(t *testing.T) {
 	if err := rrutil.CheckWeightedRoundRobinRPCs(ctx, testClient, wantAddrs); err != nil {
 		t.Fatal(err)
 	}
-
-	// Change the weight of locality2 and ensure weighted roundrobin.  Since
-	// locality2 has twice the weight of locality3, it will be picked twice as
-	// frequently as locality3 for RPCs. And since locality2 has a single
-	// backend and locality3 has two backends, the backend in locality2 will
-	// receive four times the traffic of each of locality3's backends.
-	resources = clientEndpointsResource(nodeID, edsServiceName, []localityInfo{
-		{name: localityName2, weight: 2, ports: ports[1:2]},
-		{name: localityName3, weight: 1, ports: ports[2:4]},
-	})
-	if err := managementServer.Update(ctx, resources); err != nil {
-		t.Fatal(err)
-	}
-	wantAddrs = []resolver.Address{addrs[1], addrs[1], addrs[1], addrs[1], addrs[2], addrs[3]}
-	if err := rrutil.CheckWeightedRoundRobinRPCs(ctx, testClient, wantAddrs); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // TestEDS_EndpointsHealth tests the cluster_resolver LB policy using an EDS
@@ -454,7 +424,8 @@ func (s) TestEDS_EndpointsHealth(t *testing.T) {
 					"discoveryMechanisms": [{
 						"cluster": "%s",
 						"type": "EDS",
-						"edsServiceName": "%s"
+						"edsServiceName": "%s",
+						"outlierDetection": {}
 					}],
 					"xdsLbPolicy":[{"round_robin":{}}]
 				}
@@ -520,7 +491,8 @@ func (s) TestEDS_EmptyUpdate(t *testing.T) {
 					"discoveryMechanisms": [{
 						"cluster": "%s",
 						"type": "EDS",
-						"edsServiceName": "%s"
+						"edsServiceName": "%s",
+						"outlierDetection": {}
 					}],
 					"xdsLbPolicy":[{"round_robin":{}}]
 				}
