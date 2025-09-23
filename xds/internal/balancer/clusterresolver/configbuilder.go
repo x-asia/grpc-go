@@ -149,6 +149,12 @@ func buildClusterImplConfigForDNS(g *nameGenerator, endpoints []resolver.Endpoin
 		// iteration variable and the original slice.
 		retEndpoints[i].Addresses = append([]resolver.Address{}, e.Addresses...)
 	}
+	for i := range len(endpoints) {
+		for j := range len(retEndpoints[i].Addresses) {
+			retEndpoints[i].Addresses[j].ServerName = mechanism.DNSHostname
+		}
+	}
+
 	return pName, &clusterimpl.LBConfig{
 		Cluster:               mechanism.Cluster,
 		TelemetryLabels:       mechanism.TelemetryLabels,
