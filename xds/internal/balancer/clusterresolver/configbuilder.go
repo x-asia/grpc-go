@@ -147,7 +147,15 @@ func buildClusterImplConfigForDNS(g *nameGenerator, endpoints []resolver.Endpoin
 		retEndpoints[i] = hierarchy.SetInEndpoint(e, []string{pName})
 		// Copy the nested address field as slice fields are shared by the
 		// iteration variable and the original slice.
-		retEndpoints[i].Addresses = append([]resolver.Address{}, e.Addresses...)
+		// retEndpoints[i].Addresses = append([]resolver.Address{}, e.Addresses...)
+
+		// @yuki.ito: Hack the original implementation above to set the ServerName field.
+		// Motivation is described in this PR: https://github.com/grpc/grpc-go/pull/5793
+		retEndpoints[i].Addresses = make([]resolver.Address, len(e.Addresses))
+		for j, addr := range e.Addresses {
+			retEndpoints[i].Addresses[j] = addr
+			retEndpoints[i].Addresses[j].ServerName = mechanism.DNSHostname
+		}
 	}
 	return pName, &clusterimpl.LBConfig{
 		Cluster:               mechanism.Cluster,
