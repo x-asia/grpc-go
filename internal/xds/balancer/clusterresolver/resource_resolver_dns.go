@@ -137,6 +137,7 @@ func (dr *dnsDiscoveryMechanism) UpdateState(state resolver.State) error {
 	if len(endpoints) == 0 {
 		endpoints = make([]resolver.Endpoint, len(state.Addresses))
 		for i, a := range state.Addresses {
+			a.ServerName = dr.target
 			endpoints[i] = resolver.Endpoint{Addresses: []resolver.Address{a}}
 			endpoints[i].Attributes = a.BalancerAttributes
 		}
