@@ -20,9 +20,11 @@ package clusterimpl
 
 import (
 	"context"
+	"fmt"
 	"maps"
 
 	v3orcapb "github.com/cncf/xds/go/xds/data/orca/v3"
+
 	"google.golang.org/grpc/balancer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -147,6 +149,7 @@ func (d *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 		// be used.
 		lID = scw.localityID
 
+		fmt.Printf("scw.hostname: %s\n", scw.hostname)
 		if scw.hostname != "" && autoHostRewriteEnabled(info.Ctx) {
 			if pr.Metadata == nil {
 				pr.Metadata = metadata.Pairs(":authority", scw.hostname)

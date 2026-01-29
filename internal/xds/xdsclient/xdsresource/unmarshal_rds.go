@@ -24,16 +24,16 @@ import (
 	"strings"
 	"time"
 
+	v3routepb "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	v3typepb "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/internal/envconfig"
 	"google.golang.org/grpc/internal/xds/clients/xdsclient"
 	"google.golang.org/grpc/internal/xds/clusterspecifier"
 	"google.golang.org/grpc/internal/xds/matcher"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
-
-	v3routepb "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
-	v3typepb "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 )
 
 func unmarshalRouteConfigResource(r *anypb.Any, opts *xdsclient.DecodeOptions) (string, RouteConfigUpdate, error) {
@@ -83,7 +83,7 @@ func generateRDSUpdateFromRouteConfiguration(rc *v3routepb.RouteConfiguration, o
 	// cspNames represents all the cluster specifiers referenced by Route
 	// Actions - any cluster specifiers not referenced by a Route Action can be
 	// ignored and not emitted by the xdsclient.
-	var cspNames = make(map[string]bool)
+	cspNames := make(map[string]bool)
 	for _, vh := range rc.GetVirtualHosts() {
 		routes, cspNs, err := routesProtoToSlice(vh.Routes, csps, opts)
 		if err != nil {
@@ -210,7 +210,7 @@ func generateRetryConfig(rp *v3routepb.RetryPolicy) (*RetryConfig, error) {
 
 func routesProtoToSlice(routes []*v3routepb.Route, csps map[string]clusterspecifier.BalancerConfig, opts *xdsclient.DecodeOptions) ([]*Route, map[string]bool, error) {
 	var routesRet []*Route
-	var cspNames = make(map[string]bool)
+	cspNames := make(map[string]bool)
 	for _, r := range routes {
 		match := r.GetMatch()
 		if match == nil {
@@ -304,6 +304,7 @@ func routesProtoToSlice(routes []*v3routepb.Route, csps map[string]clusterspecif
 		case *v3routepb.Route_Route:
 			action := r.GetRoute()
 
+			fmt.Printf("config: %v, ops: %v, action AutoHostRewrite: %+v\n", envconfig.XDSAuthorityRewrite, opts, action.GetAutoHostRewrite())
 			if envconfig.XDSAuthorityRewrite {
 				if opts != nil && opts.ServerConfig != nil && opts.ServerConfig.SupportsServerFeature(xdsclient.ServerFeatureTrustedXDSServer) {
 					route.AutoHostRewrite = action.GetAutoHostRewrite().GetValue()
