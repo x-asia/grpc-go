@@ -149,7 +149,7 @@ func (d *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 		// be used.
 		lID = scw.localityID
 
-		fmt.Printf("scw.hostname: %s\n", scw.hostname)
+		fmt.Printf("scw.hostname: %s, autoHostRewriteEnabled: %t\n", scw.hostname, autoHostRewriteEnabled(info.Ctx))
 		if scw.hostname != "" && autoHostRewriteEnabled(info.Ctx) {
 			if pr.Metadata == nil {
 				pr.Metadata = metadata.Pairs(":authority", scw.hostname)
