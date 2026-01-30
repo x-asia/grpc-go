@@ -34,6 +34,7 @@ import (
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/internal"
@@ -187,13 +188,9 @@ func dial(ctx context.Context, fn func(context.Context, string) (net.Conn, error
 
 func isTemporary(err error) bool {
 	switch err := err.(type) {
-	case interface {
-		Temporary() bool
-	}:
+	case interface{ Temporary() bool }:
 		return err.Temporary()
-	case interface {
-		Timeout() bool
-	}:
+	case interface{ Timeout() bool }:
 		// Timeouts may be resolved upon retry, and are thus treated as
 		// temporary.
 		return err.Timeout()
@@ -764,6 +761,7 @@ func (t *http2Client) NewStream(ctx context.Context, callHdr *CallHdr) (*ClientS
 	// override, the authority string is validated. If the credentials do not
 	// implement the AuthorityValidator interface, or if validation fails, the
 	// RPC is failed with a status code of `UNAVAILABLE`.
+	fmt.Printf("callHdr.Authority: %s \n", callHdr.Authority)
 	if callHdr.Authority != "" {
 		auth, ok := t.authInfo.(credentials.AuthorityValidator)
 		if !ok {
@@ -1520,7 +1518,7 @@ func (t *http2Client) operateHeaders(frame *http2.MetaHeadersFrame) {
 	// In case http status doesn't provide any error information (status : 200),
 	// then evalute response code to be Unknown.
 	if !isGRPC {
-		var grpcErrorCode = codes.Internal
+		grpcErrorCode := codes.Internal
 		if httpStatus == "" {
 			httpStatusErr = "malformed header: missing HTTP status"
 		} else {
