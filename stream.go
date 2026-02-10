@@ -21,6 +21,7 @@ package grpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	rand "math/rand/v2"
@@ -201,6 +202,7 @@ func endOfClientStream(cc *ClientConn, err error, opts ...CallOption) {
 }
 
 func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, method string, opts ...CallOption) (_ ClientStream, err error) {
+	fmt.Printf("newClientStream called for method: %s\n", method)
 	if channelz.IsOn() {
 		cc.incrCallsStarted()
 	}
@@ -236,6 +238,7 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 	}
 	// Provide an opportunity for the first RPC to see the first service config
 	// provided by the resolver.
+	fmt.Println("Waiting for resolved addresses in newClientStream")
 	nameResolutionDelayed, err := cc.waitForResolvedAddrs(ctx)
 	if err != nil {
 		return nil, err
