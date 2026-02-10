@@ -241,6 +241,7 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 	fmt.Printf("%s newClientStream called for method, Waiting for resolved addresses in newClientStream\n", method)
 	nameResolutionDelayed, err := cc.waitForResolvedAddrs(ctx)
 	if err != nil {
+		fmt.Printf("%s err waitForResolvedAddrs, %s\n", method, err)
 		return nil, err
 	}
 
