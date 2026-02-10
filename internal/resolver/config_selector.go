@@ -21,6 +21,7 @@ package resolver
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"google.golang.org/grpc/internal/serviceconfig"
@@ -162,6 +163,9 @@ func (scs *SafeConfigSelector) UpdateConfigSelector(cs ConfigSelector) {
 // SelectConfig defers to the current ConfigSelector in scs.
 func (scs *SafeConfigSelector) SelectConfig(r RPCInfo) (*RPCConfig, error) {
 	scs.mu.RLock()
+
+	fmt.Printf("%s type of scs.cs: %T\n", r.Method, scs.cs)
+
 	defer scs.mu.RUnlock()
 	return scs.cs.SelectConfig(r)
 }
