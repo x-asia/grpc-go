@@ -29,6 +29,7 @@ import (
 	"time"
 
 	xxhash "github.com/cespare/xxhash/v2"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/internal/grpcutil"
 	iresolver "google.golang.org/grpc/internal/resolver"
@@ -159,8 +160,10 @@ type configSelector struct {
 	httpFilterConfig []xdsresource.HTTPFilter
 }
 
-var errNoMatchedRouteFound = status.Errorf(codes.Unavailable, "no matched route was found")
-var errUnsupportedClientRouteAction = status.Errorf(codes.Unavailable, "matched route does not have a supported route action type")
+var (
+	errNoMatchedRouteFound          = status.Errorf(codes.Unavailable, "no matched route was found")
+	errUnsupportedClientRouteAction = status.Errorf(codes.Unavailable, "matched route does not have a supported route action type")
+)
 
 // annotateErrorWithNodeID annotates the given error with the provided xDS node
 // ID. This is used by the real config selector when it runs into errors, and
@@ -170,6 +173,8 @@ func annotateErrorWithNodeID(err error, nodeID string) error {
 }
 
 func (cs *configSelector) SelectConfig(rpcInfo iresolver.RPCInfo) (*iresolver.RPCConfig, error) {
+	fmt.Printf("ConfigSelector: SelectConfig called for method %q\n", rpcInfo.Method)
+
 	var rt *route
 	// Loop through routes in order and select first match.
 	for _, r := range cs.routes {
@@ -191,6 +196,7 @@ func (cs *configSelector) SelectConfig(rpcInfo iresolver.RPCInfo) (*iresolver.RP
 	if !ok {
 		return nil, annotateErrorWithNodeID(status.Errorf(codes.Internal, "error retrieving cluster for match: %v (%T)", cluster, cluster), cs.xdsNodeID)
 	}
+	fmt.Printf("ConfigSelector: SelectConfig cluster %q\n", cluster.name)
 
 	// Add a ref to the selected cluster, as this RPC needs this cluster until
 	// it is committed.

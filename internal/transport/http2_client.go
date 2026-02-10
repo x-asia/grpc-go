@@ -761,7 +761,7 @@ func (t *http2Client) NewStream(ctx context.Context, callHdr *CallHdr) (*ClientS
 	// override, the authority string is validated. If the credentials do not
 	// implement the AuthorityValidator interface, or if validation fails, the
 	// RPC is failed with a status code of `UNAVAILABLE`.
-	fmt.Printf("callHdr.Authority: %s \n", callHdr.Authority)
+	fmt.Printf("t.address.ServerName: %s, callHdr.Authority: %s \n", t.address.ServerName, callHdr.Authority)
 	if callHdr.Authority != "" {
 		auth, ok := t.authInfo.(credentials.AuthorityValidator)
 		if !ok {
