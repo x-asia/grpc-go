@@ -202,7 +202,7 @@ func endOfClientStream(cc *ClientConn, err error, opts ...CallOption) {
 }
 
 func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, method string, opts ...CallOption) (_ ClientStream, err error) {
-	fmt.Printf("newClientStream called for method: %s\n", method)
+	fmt.Printf("%s newClientStream called for method\n", method)
 	if channelz.IsOn() {
 		cc.incrCallsStarted()
 	}
@@ -238,7 +238,7 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 	}
 	// Provide an opportunity for the first RPC to see the first service config
 	// provided by the resolver.
-	fmt.Println("Waiting for resolved addresses in newClientStream")
+	fmt.Printf("%s newClientStream called for method, Waiting for resolved addresses in newClientStream\n", method)
 	nameResolutionDelayed, err := cc.waitForResolvedAddrs(ctx)
 	if err != nil {
 		return nil, err

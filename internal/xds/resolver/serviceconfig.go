@@ -173,7 +173,7 @@ func annotateErrorWithNodeID(err error, nodeID string) error {
 }
 
 func (cs *configSelector) SelectConfig(rpcInfo iresolver.RPCInfo) (*iresolver.RPCConfig, error) {
-	fmt.Printf("ConfigSelector: SelectConfig called for method %q\n", rpcInfo.Method)
+	fmt.Printf("%s ConfigSelector: SelectConfig called for method\n", rpcInfo.Method)
 
 	var rt *route
 	// Loop through routes in order and select first match.
