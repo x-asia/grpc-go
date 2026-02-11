@@ -232,9 +232,16 @@ func FindBestMatchingVirtualHost(host string, vHosts []*VirtualHost) *VirtualHos
 	var domains []string
 	for _, vh := range vHosts {
 		domains = append(domains, vh.Domains...)
+
+		for _, route := range vh.Routes {
+			for _, wc := range route.WeightedClusters {
+				fmt.Printf("debug: WeightedClusters %s for host=%s\n", wc.Name, host)
+			}
+		}
 	}
 
 	fmt.Printf("debug: entering FindBestMatchingVirtualHost with host=%s and vHosts=%v\n", host, domains)
+
 	var (
 		matchVh   *VirtualHost
 		matchType = domainMatchTypeInvalid
