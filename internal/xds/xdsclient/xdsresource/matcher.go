@@ -229,7 +229,12 @@ func match(domain, host string) (domainMatchType, bool) {
 //	  * This is to compare the length of the matching pattern, e.g. “*ABCDE” >
 //	    “*ABC”
 func FindBestMatchingVirtualHost(host string, vHosts []*VirtualHost) *VirtualHost { // Maybe move this crap to client
-	fmt.Printf("debug: entering FindBestMatchingVirtualHost with host=%s and vHosts=%v\n", host, vHosts)
+	var domains []string
+	for _, vh := range vHosts {
+		domains = append(domains, vh.Domains...)
+	}
+
+	fmt.Printf("debug: entering FindBestMatchingVirtualHost with host=%s and vHosts=%v\n", host, domains)
 	var (
 		matchVh   *VirtualHost
 		matchType = domainMatchTypeInvalid
