@@ -321,6 +321,7 @@ func routesProtoToSlice(routes []*v3routepb.Route, csps map[string]clusterspecif
 
 			switch a := action.GetClusterSpecifier().(type) {
 			case *v3routepb.RouteAction_Cluster:
+				fmt.Printf("debug: route=%s, cluster=%s\n", r.Name, a.Cluster)
 				route.WeightedClusters = append(route.WeightedClusters, WeightedCluster{Name: a.Cluster, Weight: 1})
 			case *v3routepb.RouteAction_WeightedClusters:
 				wcs := a.WeightedClusters
