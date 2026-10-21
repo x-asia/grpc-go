@@ -9,6 +9,6 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20221215174704-0915cd710c24 // indirect
 	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616
 	golang.org/x/tools v0.4.0
-	google.golang.org/protobuf v1.28.1 // indirect
+	google.golang.org/protobuf v1.33.0 // indirect
 	honnef.co/go/tools v0.3.3
 )
