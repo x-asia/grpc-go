@@ -1,6 +1,6 @@
 module google.golang.org/grpc/security/authorization
 
-go 1.17
+go 1.25.0
 
 require (
 	github.com/envoyproxy/go-control-plane v0.9.9-0.20210512163311-63b5d3c536b0
@@ -17,6 +17,6 @@ require (
 	github.com/envoyproxy/protoc-gen-validate v0.1.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/stoewer/go-strcase v1.2.0 // indirect
-	golang.org/x/net v0.4.0 // indirect
-	golang.org/x/text v0.5.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )
